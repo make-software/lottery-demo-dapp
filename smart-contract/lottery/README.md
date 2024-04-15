@@ -5,24 +5,20 @@ This smart contract allows users to participate in a demo lottery on the Casper 
 
 ## Functionalities
 
-* Create lottery rounds with defined start and end timestamps.
 * Configure settings like ticket price, maximum consolation prize, prize probabilities, and fees.
-* Allow users to participate in the lottery by purchasing tickets (NFTs).
+* Allow users to participate in the lottery.
 * Determine lottery winners based on a pseudo-random number generation mechanism (for demo purposes only).
 * Distribute jackpot and consolation prizes to winners.
-* Provide owner with administrative functionalities like pausing/unpausing the contract, topping up the prize pool, and configuring settings.
+* Provide owner with administrative functionalities topping up the prize pool, and configuring settings.
 
 ## Entry Points (Public Functions)
 
 ### Admin
 These functionalities can only be called by the contract owner (designated during deployment). They are used for configuration and maintenance purposes.
 
-  * `create_round(starts_at: u64, ends_at: u64)`: Creates a new lottery round with specified start and end timestamps.
   * `configure(max_consolation_prize: Option<U512>, lottery_fee: Option<U512>, jackpot_probability: Option<u8>, consolation_prize_probability: Option<u8>, ticket_price: Option<U512>)`: Configures various lottery settings.
-  * `pause()`: Pauses the contract, preventing user interaction.
-  * `unpause()`: Unpauses the contract, allowing user interaction again.
   * `top_up_prize_pool()`: Allows the owner to add funds to the prize pool.
-  * `transfer_fees_to_account(amount: U512, reciver: Address)`: Transfers the requested amount to reciver`s address. Reverts if the requested amount bigger than collected fees.
+  * `transfer_fees_to_account(amount: U512, reciver: Address)`: Transfers the requested amount to receiver`s address. Reverts if the requested amount bigger than collected fees.
 
 ### User
 
@@ -30,8 +26,6 @@ These functionalities can only be called by the contract owner (designated durin
 
 ## Queries (Public View Functions)
 
-* `starts_at(round_id: Option<RoundId>)`: Retrieves the start timestamp of a specific round (optional parameter for round ID, defaults to the active round).
-* `ends_at(round_id: Option<RoundId>)`: Retrieves the end timestamp of a specific round (optional parameter for round ID, defaults to the active round).
 * `ticket_price()`: Returns the current ticket price.
 * `prize_pool()`: Returns the current prize pool balance.
 
@@ -40,9 +34,8 @@ These functionalities can only be called by the contract owner (designated durin
 1. The contract owner deploys the contract and creates the first lottery round.
 2. Users can then check the ticket price using `ticket_price()`.
 3. To participate, a user calls `play_lottery()` while attaching the required amount (ticket price) in Casper tokens (CSPR).
-4. Upon calling `play_lottery()`, the user receives an NFT representing their lottery entry.
-5. **Note:** Whether the user is a winner is immediately determined based on a pseudo-random number generation mechanism (for demo purposes only). This mechanism is not suitable for production use.
-6. Winners receive their prizes automatically (jackpot or consolation prize) based on the outcome.
+4. **Note:** Whether the user is a winner is immediately determined based on a pseudo-random number generation mechanism (for demo purposes only). This mechanism is not suitable for production use.
+5. Winners receive their prizes automatically (jackpot or consolation prize) based on the outcome.
 
 ## Deployment Addresses
 

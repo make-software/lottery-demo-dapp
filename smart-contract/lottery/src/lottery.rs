@@ -1,38 +1,25 @@
 use core::cmp::min;
-use odra::casper_types::URef;
 use odra::casper_types::U256;
 use odra::casper_types::U512;
 #[cfg(target_arch = "wasm32")]
 use odra::odra_casper_wasm_env::casper_contract::contract_api::storage;
 use odra::prelude::*;
 use odra::Address;
-use odra::Mapping;
 use odra::SubModule;
 use odra::Var;
-use odra_cep47;
-use odra_cep47::cep47::Meta;
-use odra_cep47::cep47::TokenId;
 use odra_modules::access::Ownable;
 
 /// Unique identifier for a lottery round
 pub type RoundId = u32;
 
-/// Struct representing a lottery round
-#[odra::odra_type]
-pub struct Round {
-    starts_at: u64,
-    ends_at: u64,
-}
+/// Unique identifier for a lottery round
+pub type PlayId = U256;
 
 /// Custom error type for the lottery contract
 #[odra::odra_error]
 pub enum Error {
-    LotteryIsNotActive = 1,
-    WrongPayment = 2,
-    LotteryInProgress = 3,
-    RoundNotFound = 4,
-    ContractPaused = 5,
-    InvalidProbabiliy = 6,
+    WrongPayment = 1,
+    InvalidProbability = 2,
 }
 
 /// Event emitted when a user enters the lottery
@@ -43,7 +30,7 @@ pub struct Play {
     /// Address of the player
     pub player: Address,
     /// Unique identifier for the player's entry
-    pub play_id: U256,
+    pub play_id: PlayId,
     /// Timestamp of the entry
     pub timestamp: u64,
     /// Prize won by the player (if any)
@@ -64,16 +51,10 @@ enum Outcome {
 pub struct Lottery {
     /// Ownable sub-module for managing contract ownership
     ownable: SubModule<Ownable>,
-    /// CEP-47 token sub-module for managing the lottery NFT
-    cep47: SubModule<odra_cep47::cep47::Cep47>,
-    /// Mapping to store rounds data
-    rounds: Mapping<RoundId, Round>,
-    /// Variable to store the ID of the next round
-    next_round: Var<u32>,
-    /// Variable to store the ID for the next play
-    next_play_id: Var<U256>,
-    /// Flag indicating if the contract is paused
-    is_paused: Var<bool>,
+    /// Variable to store the ID of the current round
+    current_round: Var<u32>,
+    /// Variable to store the current play ID for the round
+    current_play_id: Var<U256>,
     /// Variable to store collected fees
     collected_fees: Var<U512>,
     /// Variable to store the current prize pool
@@ -86,17 +67,13 @@ pub struct Lottery {
     jackpot_probability: Var<u8>,
     /// Variable to store the consolation prize winning probability
     consolation_prize_probability: Var<u8>,
-    /// Variable to store the ID of the active round (if any)
-    active_round: Var<u32>,
     /// Variable to store the ticket price
     ticket_price: Var<U512>,
-    /// Variable to store the token metadata
-    token_meta: Var<Meta>,
 }
 
 #[odra::module]
 impl Lottery {
-    /// Initializes the lottery contract with configuration parameters
+    /// Initializes the lottery contract with default configuration parameters
     pub fn init(
         &mut self,
         lottery_fee: U512,
@@ -104,14 +81,10 @@ impl Lottery {
         max_consolation_prize: U512,
         jackpot_probability: u8,
         consolation_prize_probability: u8,
-        name: String,
-        symbol: String,
-        meta: Meta,
-        token_meta: Meta,
     ) {
         self.ownable.init();
-        self.cep47.init(name, symbol, meta);
-        self.next_round.set(1);
+        self.current_round.set(1);
+        self.current_play_id.set(U256::one());
         self.collected_fees.set(U512::zero());
         self.prize_pool.set(U512::zero());
         self.lottery_fee.set(lottery_fee);
@@ -122,23 +95,10 @@ impl Lottery {
         self.assert_probability(consolation_prize_probability);
         self.consolation_prize_probability
             .set(consolation_prize_probability);
-        self.next_play_id.set(U256::one());
-        self.token_meta.set(token_meta);
     }
 
     /// Functions from the submodules that are public in our smart contract
     delegate! {
-        to self.cep47 {
-            fn name(&self) -> String;
-            fn symbol(&self) -> String;
-            fn meta(&self) -> BTreeMap<String, String>;
-            fn total_supply(&self) -> U256;
-            fn balance_of(&self, owner: Address)-> U256;
-            fn owner_of(&self, token_id: TokenId) -> Option<Address>;
-            fn token_meta(&self, token_id: TokenId) -> Option<Meta>;
-            fn get_token_by_index(&self, owner: Address, index: U256) -> Option<TokenId>;
-        }
-
         to self.ownable {
             fn get_owner(&self) -> Address;
             fn transfer_ownership(&mut self, new_owner: &Address);
@@ -149,33 +109,11 @@ impl Lottery {
     Admin
     */
 
-    /// Pauses the lottery contract. Only the owner can call this.
-    pub fn pause(&mut self) {
-        self.ownable.assert_owner(&self.env().caller());
-        self.is_paused.set(true);
-    }
-
-    /// Unpauses the lottery contract. Only the owner can call this.
-    pub fn unpause(&mut self) {
-        self.ownable.assert_owner(&self.env().caller());
-        self.is_paused.set(false);
-    }
-
-    /// Creates a new round for the lottery.
-    /// This function requires ownership and ensures the lottery is not paused.
-    pub fn create_round(&mut self, starts_at: u64, ends_at: u64) -> RoundId {
-        self.assert_not_paused();
-        self.ownable.assert_owner(&self.env().caller());
-        let current_round = self.next_round.get_or_default();
-        self.rounds
-            .set(&current_round, Round { starts_at, ends_at });
-        self.next_round.add(1);
-        self.active_round.set(current_round);
-        current_round
-    }
-
     /// Configures various settings for the lottery contract.
-    /// This function requires ownership and ensures the lottery is not active.
+    /// This function requires ownership.
+    ///
+    /// It would be correct for the changes in configuration to take effect starting
+    /// the next round, but we will not do that to keep the implementation simpler
     pub fn configure(
         &mut self,
         max_consolation_prize: Option<U512>,
@@ -185,7 +123,6 @@ impl Lottery {
         ticket_price: Option<U512>,
     ) {
         self.ownable.assert_owner(&self.env().caller());
-        self.assert_not_active();
 
         if let Some(prize) = max_consolation_prize {
             self.max_consolation_prize.set(prize);
@@ -210,19 +147,12 @@ impl Lottery {
         }
     }
 
-    /// Sets the token metadata
-    /// This function requires ownership.
-    pub fn set_token_meta(&mut self, meta: Meta) {
-        self.ownable.assert_owner(&self.env().caller());
-        self.token_meta.set(meta);
-    }
-
     /// Withdraws the collected fees
     /// This function requires ownership.
-    pub fn transfer_fees_to_account(&mut self, amount: U512, reciver: Address) {
+    pub fn transfer_fees_to_account(&mut self, amount: U512, receiver: Address) {
         self.ownable.assert_owner(&self.env().caller());
         self.collected_fees.subtract(amount);
-        self.env().transfer_tokens(&reciver, &amount);
+        self.env().transfer_tokens(&receiver, &amount);
     }
 
     /// Adds the attached value to the prize pool.
@@ -244,88 +174,59 @@ impl Lottery {
     ///
     /// It performs the following actions:
     ///  - Adds the attached value to the prize pool, deducting the lottery fee.
-    ///  - Mints a new token representing the user's participation.
     ///  - Determines the outcome (jackpot, consolation prize, or no win).
     ///  - Distributes prizes and emits an event based on the outcome.
     #[odra(payable)]
     pub fn play_lottery(&mut self) {
-        self.assert_not_paused();
-        self.assert_active();
         self.assert_deposit();
-        let round_id = self.active_round.get_or_default();
-        let play_id = self.next_play_id.get_or_default();
+        let round_id = self.current_round.get_or_default();
+        let play_id = self.current_play_id.get_or_default();
         let caller = self.env().caller();
         self.collected_fees.add(self.lottery_fee.get_or_default());
         self.prize_pool
             .add(self.env().attached_value() - self.lottery_fee.get_or_default());
-        let meta = self.token_meta.get_or_default();
-        match self.cep47.mint(caller, vec![play_id], vec![meta]) {
-            Ok(_) => (),
-            Err(err) => self.env().revert(err),
-        }
-        self.next_play_id.add(U256::one());
+
+        let mut play_event = Play {
+            round_id,
+            player: caller,
+            play_id,
+            timestamp: self.env().get_block_time(),
+            is_jackpot: false,
+            prize: U512::zero(),
+        };
+
         match self.determine_outcome() {
             Outcome::Jackpot => {
                 let prize = self.prize_pool.get_or_default();
                 self.env().transfer_tokens(&caller, &prize);
                 self.prize_pool.set(U512::zero());
-                self.env().emit_event(Play {
-                    round_id,
-                    player: caller,
-                    play_id,
-                    timestamp: self.env().get_block_time(),
-                    is_jackpot: true,
-                    prize,
-                })
+
+                // update play event state
+                play_event.is_jackpot = true;
+                play_event.prize = prize;
+
+                // go to next round
+                self.current_round.add(1);
             }
             Outcome::ConsolationPrize(prize) => {
                 self.env().transfer_tokens(&caller, &prize);
                 self.prize_pool.subtract(prize);
-                self.env().emit_event(Play {
-                    round_id,
-                    player: caller,
-                    play_id,
-                    timestamp: self.env().get_block_time(),
-                    is_jackpot: false,
-                    prize,
-                })
+
+                // update play event state
+                play_event.prize = prize;
             }
-            Outcome::NoWin => self.env().emit_event(Play {
-                round_id,
-                player: caller,
-                play_id,
-                timestamp: self.env().get_block_time(),
-                is_jackpot: false,
-                prize: U512::zero(),
-            }),
+            _ => {}
         }
+
+        self.current_play_id.set(U256::one());
+        self.env().emit_event(play_event);
     }
 
     /*
     Queries
     */
 
-    /// Returns the start time of a lottery round.
-    /// It takes an optional `round_id` and retrieves the start time of the specified round if it exists. Otherwise reurns `None`.
-    pub fn starts_at(&self, round_id: Option<RoundId>) -> Option<u64> {
-        let round_id = round_id.unwrap_or(self.active_round.get_or_default());
-        match self.rounds.get(&round_id) {
-            Some(r) => Some(r.starts_at),
-            None => None,
-        }
-    }
-
-    /// Returns the end time of a lottery round.
-    /// It takes an optional `round_id` and retrieves the end time of the specified round if it exists. Otherwise reurns `None`.
-    pub fn ends_at(&self, round_id: Option<RoundId>) -> Option<u64> {
-        let round_id = round_id.unwrap_or(self.active_round.get_or_default());
-        match self.rounds.get(&round_id) {
-            Some(r) => Some(r.ends_at),
-            None => None,
-        }
-    }
-
-    /// Retunrs the current prize pool of the lottery.
+    /// Returns the current prize pool of the lottery.
     pub fn prize_pool(&self) -> U512 {
         self.prize_pool.get_or_default()
     }
@@ -349,7 +250,7 @@ impl Lottery {
             + self.consolation_prize_probability.get_or_default();
 
         if random_number <= self.jackpot_probability.get_or_default().into() {
-            return Outcome::Jackpot;
+            Outcome::Jackpot
         } else if random_number <= total_probability.into() {
             let max_consolation_prize = min(
                 self.max_consolation_prize.get_or_default(),
@@ -359,9 +260,9 @@ impl Lottery {
             let scaling_factor = max_consolation_prize / 100;
             let consolation_prize =
                 U512::from((scaling_factor * random_number as u128) % max_consolation_prize);
-            return Outcome::ConsolationPrize(consolation_prize);
+            Outcome::ConsolationPrize(consolation_prize)
         } else {
-            return Outcome::NoWin;
+            Outcome::NoWin
         }
     }
 
@@ -382,39 +283,6 @@ impl Lottery {
         u64::from_be_bytes(hashed_data[..8].try_into().unwrap()) % 100
     }
 
-    /// Ensures lottery is currently active. Reverts if not.
-    fn assert_active(&self) {
-        let current_timestamp = self.env().get_block_time();
-        match self.rounds.get(&self.active_round.get_or_default()) {
-            Some(r) => {
-                if r.starts_at > current_timestamp || r.ends_at < current_timestamp {
-                    self.env().revert(Error::LotteryIsNotActive);
-                }
-            }
-            None => self.env().revert(Error::RoundNotFound),
-        }
-    }
-
-    /// Ensures lottery is not currently active. Reverts if active.
-    fn assert_not_active(&self) {
-        let current_timestamp = self.env().get_block_time();
-        match self.rounds.get(&self.active_round.get_or_default()) {
-            Some(r) => {
-                if r.starts_at < current_timestamp || r.ends_at > current_timestamp {
-                    self.env().revert(Error::LotteryInProgress);
-                }
-            }
-            None => (),
-        }
-    }
-
-    /// Ensures contract is not paused. Reverts if paused.
-    fn assert_not_paused(&self) {
-        if self.is_paused.get_or_default() {
-            self.env().revert(Error::ContractPaused)
-        }
-    }
-
     /// Ensures attached value matches ticket price. Reverts if wrong.
     fn assert_deposit(&self) {
         if self.env().attached_value() != self.ticket_price.get_or_default() {
@@ -425,7 +293,7 @@ impl Lottery {
     /// Ensures probability value is within valid range (0-100). Reverts if invalid.
     fn assert_probability(&self, value: u8) {
         if value > 100 {
-            self.env().revert(Error::InvalidProbabiliy)
+            self.env().revert(Error::InvalidProbability)
         }
     }
 }
@@ -433,20 +301,18 @@ impl Lottery {
 #[cfg(test)]
 mod tests {
     use crate::lottery::{Error, LotteryHostRef, LotteryInitArgs, Play};
+    use core::ops::Add;
     use odra::{
         casper_types::{U256, U512},
         host::{Deployer, HostRef},
     };
-    use odra_cep47::cep47::Meta;
 
-    /// Constant represenint one hour in miliseconds
-    const ONE_HOUR_IN_MILISECONDS: u64 = 3_600_000;
-    /// Constant representing 1 Casper
-    const ONE_CSPR: u64 = 1_000_000_000;
+    const ONE_HOUR_IN_MILLISECONDS: u64 = 3_600_000;
+    const ONE_CSPR_IN_MOTES: u64 = 1_000_000_000;
 
     #[test]
     fn basic_flow() {
-        let consolation = (ONE_CSPR * 49 / 100 * 4) % (ONE_CSPR * 49);
+        let consolation = (ONE_CSPR_IN_MOTES * 49 / 100 * 4) % (ONE_CSPR_IN_MOTES * 49);
         print!("consolation: {:?}", consolation);
         let env = odra_test::env();
         let admin = env.get_account(0);
@@ -454,105 +320,150 @@ mod tests {
         let bob = env.get_account(2);
         let charlie = env.get_account(3);
 
+        env.advance_block_time(ONE_HOUR_IN_MILLISECONDS);
+
+        let mut expected_round = 1;
+        let expected_play: U256 = U256::from(1);
+
         env.set_caller(admin);
         let mut contract = LotteryHostRef::deploy(
             &env,
             LotteryInitArgs {
-                lottery_fee: U512::from(1 * ONE_CSPR),
-                ticket_price: U512::from(50 * ONE_CSPR),
-                max_consolation_prize: U512::from(50 * ONE_CSPR),
+                lottery_fee: U512::from(1 * ONE_CSPR_IN_MOTES),
+                ticket_price: U512::from(50 * ONE_CSPR_IN_MOTES),
+                max_consolation_prize: U512::from(50 * ONE_CSPR_IN_MOTES),
                 jackpot_probability: 100,
                 consolation_prize_probability: 40,
-                name: String::from("lottery_demo"),
-                symbol: String::from("LOT_DEMO"),
-                meta: Meta::new(),
-                token_meta: Meta::new(),
             },
         );
-        let round_id = contract.create_round(ONE_HOUR_IN_MILISECONDS, 3 * ONE_HOUR_IN_MILISECONDS);
-        assert_eq!(round_id, 1);
-        assert_eq!(contract.ticket_price(), Some(U512::from(50 * ONE_CSPR)));
-        assert_eq!(contract.starts_at(None), Some(ONE_HOUR_IN_MILISECONDS));
-
         env.set_caller(alice);
-        assert_eq!(
-            contract
-                .with_tokens(U512::from(50 * ONE_CSPR))
-                .try_play_lottery(),
-            Err(Error::LotteryIsNotActive.into())
-        );
-
-        env.advance_block_time(ONE_HOUR_IN_MILISECONDS);
 
         assert_eq!(
             contract
-                .with_tokens(U512::from(1 * ONE_CSPR))
+                .with_tokens(U512::from(1 * ONE_CSPR_IN_MOTES))
                 .try_play_lottery(),
             Err(Error::WrongPayment.into())
         );
 
         contract
-            .with_tokens(U512::from(50 * ONE_CSPR))
+            .with_tokens(U512::from(50 * ONE_CSPR_IN_MOTES))
             .play_lottery();
 
         assert!(env.emitted_event(
             contract.address(),
             &Play {
-                round_id: 1,
+                round_id: expected_round,
                 player: alice,
-                play_id: U256::from(1),
-                prize: U512::from(49 * ONE_CSPR),
+                play_id: expected_play,
+                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
-                timestamp: ONE_HOUR_IN_MILISECONDS,
+                timestamp: ONE_HOUR_IN_MILLISECONDS,
             },
         ));
         assert_eq!(env.events_count(contract.address()), 2);
-        assert_eq!(contract.balance_of(alice), U256::one());
-        assert_eq!(contract.owner_of(U256::from(1)), Some(alice));
+        expected_round += 1; // expected next round
+        let _ = expected_play.add(1); // expected next play
 
         env.set_caller(bob);
         contract
-            .with_tokens(U512::from(50 * ONE_CSPR))
+            .with_tokens(U512::from(50 * ONE_CSPR_IN_MOTES))
             .play_lottery();
 
         assert!(env.emitted_event(
             contract.address(),
             &Play {
-                round_id: 1,
+                round_id: expected_round,
                 player: bob,
-                play_id: U256::from(2),
-                prize: U512::from(49 * ONE_CSPR),
+                play_id: U256::from(1),
+                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
-                timestamp: ONE_HOUR_IN_MILISECONDS,
+                timestamp: ONE_HOUR_IN_MILLISECONDS,
             },
         ));
         assert_eq!(env.events_count(contract.address()), 3);
-        assert_eq!(contract.balance_of(bob), U256::one());
-        assert_eq!(contract.owner_of(U256::from(2)), Some(bob));
+        expected_round += 1; // expected next round
+        let _ = expected_play.add(1); // expected next play
 
-        let inital_balance = env.balance_of(&charlie);
         env.set_caller(charlie);
         contract
-            .with_tokens(U512::from(50 * ONE_CSPR))
+            .with_tokens(U512::from(50 * ONE_CSPR_IN_MOTES))
             .play_lottery();
 
         assert!(env.emitted_event(
             contract.address(),
             &Play {
-                round_id: 1,
+                round_id: expected_round,
                 player: charlie,
-                play_id: U256::from(3),
-                prize: U512::from(49 * ONE_CSPR),
+                play_id: expected_play,
+                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
-                timestamp: ONE_HOUR_IN_MILISECONDS,
+                timestamp: ONE_HOUR_IN_MILLISECONDS,
             },
         ));
         assert_eq!(env.events_count(contract.address()), 4);
-        assert_eq!(contract.balance_of(charlie), U256::one());
-        assert_eq!(contract.owner_of(U256::from(3)), Some(charlie));
-        assert_eq!(
-            inital_balance - U512::from(1 * ONE_CSPR),
-            env.balance_of(&charlie)
-        )
+        expected_round += 1;
+        let _ = expected_play.add(1);
+
+        // ---------------------------------------------------------------------
+        // configure contract with no possibility to win
+        // ---------------------------------------------------------------------
+        env.set_caller(admin);
+        contract.configure(
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
+            Some(U512::from(1 * ONE_CSPR_IN_MOTES)),  // lottery_fee
+            Some(0),                                  // jackpot_probability
+            Some(0),                                  // consolation_prize_probability
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
+        );
+
+        env.set_caller(charlie);
+        contract
+            .with_tokens(U512::from(50 * ONE_CSPR_IN_MOTES))
+            .play_lottery();
+
+        assert!(env.emitted_event(
+            contract.address(),
+            &Play {
+                round_id: expected_round,
+                player: charlie,
+                play_id: expected_play,
+                prize: U512::zero(),
+                is_jackpot: false,
+                timestamp: ONE_HOUR_IN_MILLISECONDS,
+            },
+        ));
+        assert_eq!(env.events_count(contract.address()), 5);
+        let _ = expected_play.add(1);
+
+        // ---------------------------------------------------------------------
+        // configure contract with possibility to win only consolation_prize
+        // ---------------------------------------------------------------------
+
+        env.set_caller(admin);
+        contract.configure(
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
+            Some(U512::from(1 * ONE_CSPR_IN_MOTES)),  // lottery_fee
+            Some(0),                                  // jackpot_probability
+            Some(100),                                // consolation_prize_probability
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
+        );
+
+        env.set_caller(charlie);
+        contract
+            .with_tokens(U512::from(50 * ONE_CSPR_IN_MOTES))
+            .play_lottery();
+
+        assert!(env.emitted_event(
+            contract.address(),
+            &Play {
+                round_id: expected_round,
+                player: charlie,
+                play_id: expected_play,
+                prize: U512::from(2 * ONE_CSPR_IN_MOTES),
+                is_jackpot: false,
+                timestamp: ONE_HOUR_IN_MILLISECONDS,
+            },
+        ));
+        assert_eq!(env.events_count(contract.address()), 6);
     }
 }

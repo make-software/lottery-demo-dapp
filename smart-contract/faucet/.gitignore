@@ -1,7 +1,0 @@
-.idea
-.vscode
-/target
-Cargo.lock
-.backend*
-.builder*
-/wasm
