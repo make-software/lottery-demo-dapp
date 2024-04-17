@@ -9,28 +9,28 @@ use odra::SubModule;
 use odra::Var;
 use odra_modules::access::Ownable;
 
+/// Custom error type for the lottery contract
+#[odra::odra_error]
+pub enum Error {
+    InsufficientPayment = 1,
+    InvalidProbabilityConfiguration = 2,
+}
+
 /// Unique identifier for a lottery round
 pub type RoundId = u32;
 
 /// Unique identifier for a lottery round
 pub type PlayId = U256;
 
-/// Custom error type for the lottery contract
-#[odra::odra_error]
-pub enum Error {
-    WrongPayment = 1,
-    InvalidProbability = 2,
-}
-
 /// Event emitted when a user enters the lottery
 #[odra::event]
 pub struct Play {
+    /// Unique identifier for the player's entry
+    pub play_id: PlayId,
     /// ID of the round the user entered
     pub round_id: RoundId,
     /// Address of the player
     pub player: Address,
-    /// Unique identifier for the player's entry
-    pub play_id: PlayId,
     /// Timestamp of the entry
     pub timestamp: u64,
     /// Prize won by the player (if any)
@@ -52,9 +52,9 @@ pub struct Lottery {
     /// Ownable sub-module for managing contract ownership
     ownable: SubModule<Ownable>,
     /// Variable to store the ID of the current round
-    current_round: Var<u32>,
+    current_round_id: Var<RoundId>,
     /// Variable to store the current play ID for the round
-    current_play_id: Var<U256>,
+    current_play_id: Var<PlayId>,
     /// Variable to store collected fees
     collected_fees: Var<U512>,
     /// Variable to store the current prize pool
@@ -83,16 +83,16 @@ impl Lottery {
         consolation_prize_probability: u8,
     ) {
         self.ownable.init();
-        self.current_round.set(1);
+        self.current_round_id.set(1);
         self.current_play_id.set(U256::one());
         self.collected_fees.set(U512::zero());
         self.prize_pool.set(U512::zero());
         self.lottery_fee.set(lottery_fee);
         self.ticket_price.set(ticket_price);
         self.max_consolation_prize.set(max_consolation_prize);
-        self.assert_probability(jackpot_probability);
+        self.assert_valid_probability_configuration(jackpot_probability);
         self.jackpot_probability.set(jackpot_probability);
-        self.assert_probability(consolation_prize_probability);
+        self.assert_valid_probability_configuration(consolation_prize_probability);
         self.consolation_prize_probability
             .set(consolation_prize_probability);
     }
@@ -133,12 +133,12 @@ impl Lottery {
         }
 
         if let Some(probability) = jackpot_probability {
-            self.assert_probability(probability);
+            self.assert_valid_probability_configuration(probability);
             self.jackpot_probability.set(probability);
         }
 
         if let Some(probability) = consolation_prize_probability {
-            self.assert_probability(probability);
+            self.assert_valid_probability_configuration(probability);
             self.consolation_prize_probability.set(probability);
         }
 
@@ -178,48 +178,49 @@ impl Lottery {
     ///  - Distributes prizes and emits an event based on the outcome.
     #[odra(payable)]
     pub fn play_lottery(&mut self) {
-        self.assert_deposit();
-        let round_id = self.current_round.get_or_default();
+        self.assert_payment_is_sufficient();
+        let round_id = self.current_round_id.get_or_default();
         let play_id = self.current_play_id.get_or_default();
         let caller = self.env().caller();
         self.collected_fees.add(self.lottery_fee.get_or_default());
         self.prize_pool
             .add(self.env().attached_value() - self.lottery_fee.get_or_default());
 
-        let mut play_event = Play {
-            round_id,
-            player: caller,
-            play_id,
-            timestamp: self.env().get_block_time(),
-            is_jackpot: false,
-            prize: U512::zero(),
-        };
+        let mut is_jackpot = false;
+        let mut prize = U512::zero();
 
         match self.determine_outcome() {
             Outcome::Jackpot => {
-                let prize = self.prize_pool.get_or_default();
-                self.env().transfer_tokens(&caller, &prize);
+                let prize_value = self.prize_pool.get_or_default();
+                self.env().transfer_tokens(&caller, &prize_value);
                 self.prize_pool.set(U512::zero());
 
                 // update play event state
-                play_event.is_jackpot = true;
-                play_event.prize = prize;
+                is_jackpot = true;
+                prize = prize_value;
 
-                // go to next round
-                self.current_round.add(1);
+                // start the next round
+                self.current_round_id.add(1);
             }
-            Outcome::ConsolationPrize(prize) => {
-                self.env().transfer_tokens(&caller, &prize);
-                self.prize_pool.subtract(prize);
+            Outcome::ConsolationPrize(prize_value) => {
+                self.env().transfer_tokens(&caller, &prize_value);
+                self.prize_pool.subtract(prize_value);
 
                 // update play event state
-                play_event.prize = prize;
+                prize = prize_value;
             }
             _ => {}
         }
 
-        self.current_play_id.set(U256::one());
-        self.env().emit_event(play_event);
+        self.current_play_id.add(U256::one());
+        self.env().emit_event(Play {
+            round_id,
+            player: caller,
+            play_id,
+            timestamp: self.env().get_block_time(),
+            is_jackpot,
+            prize,
+        });
     }
 
     /*
@@ -284,16 +285,16 @@ impl Lottery {
     }
 
     /// Ensures attached value matches ticket price. Reverts if wrong.
-    fn assert_deposit(&self) {
+    fn assert_payment_is_sufficient(&self) {
         if self.env().attached_value() != self.ticket_price.get_or_default() {
-            self.env().revert(Error::WrongPayment);
+            self.env().revert(Error::InsufficientPayment);
         }
     }
 
     /// Ensures probability value is within valid range (0-100). Reverts if invalid.
-    fn assert_probability(&self, value: u8) {
+    fn assert_valid_probability_configuration(&self, value: u8) {
         if value > 100 {
-            self.env().revert(Error::InvalidProbability)
+            self.env().revert(Error::InvalidProbabilityConfiguration)
         }
     }
 }
@@ -342,7 +343,7 @@ mod tests {
             contract
                 .with_tokens(U512::from(1 * ONE_CSPR_IN_MOTES))
                 .try_play_lottery(),
-            Err(Error::WrongPayment.into())
+            Err(Error::InsufficientPayment.into())
         );
 
         contract
@@ -362,7 +363,7 @@ mod tests {
         ));
         assert_eq!(env.events_count(contract.address()), 2);
         expected_round += 1; // expected next round
-        let _ = expected_play.add(1); // expected next play
+        let expected_play = expected_play.add(1); // expected next play
 
         env.set_caller(bob);
         contract
@@ -374,7 +375,7 @@ mod tests {
             &Play {
                 round_id: expected_round,
                 player: bob,
-                play_id: U256::from(1),
+                play_id: expected_play,
                 prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
@@ -382,7 +383,7 @@ mod tests {
         ));
         assert_eq!(env.events_count(contract.address()), 3);
         expected_round += 1; // expected next round
-        let _ = expected_play.add(1); // expected next play
+        let expected_play = expected_play.add(1); // expected next play
 
         env.set_caller(charlie);
         contract
@@ -402,7 +403,7 @@ mod tests {
         ));
         assert_eq!(env.events_count(contract.address()), 4);
         expected_round += 1;
-        let _ = expected_play.add(1);
+        let expected_play = expected_play.add(1);
 
         // ---------------------------------------------------------------------
         // configure contract with no possibility to win
@@ -433,7 +434,7 @@ mod tests {
             },
         ));
         assert_eq!(env.events_count(contract.address()), 5);
-        let _ = expected_play.add(1);
+        let expected_play = expected_play.add(1);
 
         // ---------------------------------------------------------------------
         // configure contract with possibility to win only consolation_prize
