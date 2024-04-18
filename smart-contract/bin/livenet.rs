@@ -11,11 +11,11 @@ fn main() {
         lottery_fee: U512::from(1 * ONE_CSPR_IN_MOTES),
         ticket_price: U512::from(50 * ONE_CSPR_IN_MOTES),
         max_consolation_prize: U512::from(50 * ONE_CSPR_IN_MOTES),
-        jackpot_probability: 50,
-        consolation_prize_probability: 50,
+        jackpot_probability: 1,
+        consolation_prize_probability: 10,
     };
 
-    env.set_gas(5_000_000_000u64);
+    env.set_gas(200_000_000_000u64);
     LotteryHostRef::deploy(&env, init_args);
     println!("Success!");
 }
