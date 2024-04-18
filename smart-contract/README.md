@@ -75,3 +75,17 @@ To test actual WASM files against a backend
 ```
 make test-wasm
 ```
+
+### Deployment using Livenet
+
+Copy and adjust `.env` file
+
+```shell
+cp .env.sample .env
+```
+
+Run deploy command
+
+```shell
+cargo run --bin livenet --features=livenet
+```

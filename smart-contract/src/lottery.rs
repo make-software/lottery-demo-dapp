@@ -1,6 +1,6 @@
 use core::cmp::min;
-use odra::casper_types::U256;
 use odra::casper_types::URef;
+use odra::casper_types::U256;
 use odra::casper_types::U512;
 #[cfg(target_arch = "wasm32")]
 use odra::odra_casper_wasm_env::casper_contract::contract_api::storage;
