@@ -116,11 +116,11 @@ impl Lottery {
     /// the next round, but we will not do that to keep the implementation simpler
     pub fn configure(
         &mut self,
-        max_consolation_prize: Option<U512>,
+        ticket_price: Option<U512>,
         lottery_fee: Option<U512>,
         jackpot_probability: Option<u8>,
+        max_consolation_prize: Option<U512>,
         consolation_prize_probability: Option<u8>,
-        ticket_price: Option<U512>,
     ) {
         self.ownable.assert_owner(&self.env().caller());
 
@@ -274,6 +274,7 @@ impl Lottery {
         let mut salted_seed = [0u8; 80];
 
         //TODO: replace with `random_bytes` function once its available
+        //https://docs.rs/casper-contract/latest/casper_contract/contract_api/runtime/fn.random_bytes.html
         let uref: URef = storage::new_uref(1u8);
         salted_seed[..32].copy_from_slice(&uref.addr());
 
@@ -286,7 +287,7 @@ impl Lottery {
 
     /// Ensures attached value matches ticket price. Reverts if wrong.
     fn assert_payment_is_sufficient(&self) {
-        if self.env().attached_value() != self.ticket_price.get_or_default() {
+        if self.env().attached_value() < self.ticket_price.get_or_default() {
             self.env().revert(Error::InsufficientPayment);
         }
     }
@@ -408,13 +409,14 @@ mod tests {
         // ---------------------------------------------------------------------
         // configure contract with no possibility to win
         // ---------------------------------------------------------------------
+
         env.set_caller(admin);
         contract.configure(
-            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
             Some(U512::from(1 * ONE_CSPR_IN_MOTES)),  // lottery_fee
             Some(0),                                  // jackpot_probability
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
             Some(0),                                  // consolation_prize_probability
-            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
         );
 
         env.set_caller(charlie);
@@ -442,11 +444,11 @@ mod tests {
 
         env.set_caller(admin);
         contract.configure(
-            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
             Some(U512::from(1 * ONE_CSPR_IN_MOTES)),  // lottery_fee
             Some(0),                                  // jackpot_probability
+            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // max_consolation_prize
             Some(100),                                // consolation_prize_probability
-            Some(U512::from(50 * ONE_CSPR_IN_MOTES)), // ticket_price
         );
 
         env.set_caller(charlie);
