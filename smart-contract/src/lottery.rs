@@ -38,6 +38,8 @@ pub struct Play {
     pub prize: U512,
     /// Flag indicating if the entry won the jackpot
     pub is_jackpot: bool,
+    /// Current jackpot amount after play
+    pub jackpot_amount: U512,
 }
 
 /// Possible outcomes of a lottery play
@@ -188,6 +190,7 @@ impl Lottery {
             .add(self.env().attached_value() - self.lottery_fee.get_or_default());
 
         let mut is_jackpot = false;
+        let mut jackpot_amount = self.prize_pool.get_or_default();
         let mut prize = U512::zero();
 
         match self.determine_outcome() {
@@ -199,6 +202,7 @@ impl Lottery {
                 // update play event state
                 is_jackpot = true;
                 prize = prize_value;
+                jackpot_amount = prize_value;
 
                 // start the next round
                 self.current_round_id.add(1);
@@ -209,6 +213,7 @@ impl Lottery {
 
                 // update play event state
                 prize = prize_value;
+                jackpot_amount = self.prize_pool.get_or_default();
             }
             _ => {}
         }
@@ -221,6 +226,7 @@ impl Lottery {
             timestamp: self.env().get_block_time(),
             is_jackpot,
             prize,
+            jackpot_amount,
         });
     }
 
@@ -361,6 +367,7 @@ mod tests {
                 prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
+                jackpot_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 2);
@@ -381,6 +388,7 @@ mod tests {
                 prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
+                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 3);
@@ -401,6 +409,7 @@ mod tests {
                 prize: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
+                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 4);
@@ -434,6 +443,7 @@ mod tests {
                 prize: U512::zero(),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
+                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 5);
@@ -466,6 +476,7 @@ mod tests {
                 prize: U512::from(2 * ONE_CSPR_IN_MOTES),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
+                jackpot_amount:  U512::from(96 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 6);
