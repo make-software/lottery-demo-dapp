@@ -35,7 +35,7 @@ pub struct Play {
     /// Timestamp of the entry
     pub timestamp: u64,
     /// Prize won by the player (if any)
-    pub prize: U512,
+    pub prize_amount: U512,
     /// Flag indicating if the entry won the jackpot
     pub is_jackpot: bool,
     /// Current jackpot amount after play
@@ -190,8 +190,7 @@ impl Lottery {
             .add(self.env().attached_value() - self.lottery_fee.get_or_default());
 
         let mut is_jackpot = false;
-        let mut jackpot_amount = self.prize_pool.get_or_default();
-        let mut prize = U512::zero();
+        let mut prize_amount = U512::zero();
 
         match self.determine_outcome() {
             Outcome::Jackpot => {
@@ -201,8 +200,7 @@ impl Lottery {
 
                 // update play event state
                 is_jackpot = true;
-                prize = prize_value;
-                jackpot_amount = prize_value;
+                prize_amount = prize_value;
 
                 // start the next round
                 self.current_round_id.add(1);
@@ -212,8 +210,7 @@ impl Lottery {
                 self.prize_pool.subtract(prize_value);
 
                 // update play event state
-                prize = prize_value;
-                jackpot_amount = self.prize_pool.get_or_default();
+                prize_amount = prize_value;
             }
             _ => {}
         }
@@ -225,8 +222,8 @@ impl Lottery {
             play_id,
             timestamp: self.env().get_block_time(),
             is_jackpot,
-            prize,
-            jackpot_amount,
+            prize_amount,
+            jackpot_amount: self.prize_pool.get_or_default(),
         });
     }
 
@@ -364,10 +361,10 @@ mod tests {
                 round_id: expected_round,
                 player: alice,
                 play_id: expected_play,
-                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
+                prize_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
+                jackpot_amount: U512::zero(),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 2);
@@ -385,10 +382,10 @@ mod tests {
                 round_id: expected_round,
                 player: bob,
                 play_id: expected_play,
-                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
+                prize_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
+                jackpot_amount:  U512::zero(),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 3);
@@ -406,10 +403,10 @@ mod tests {
                 round_id: expected_round,
                 player: charlie,
                 play_id: expected_play,
-                prize: U512::from(49 * ONE_CSPR_IN_MOTES),
+                prize_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
+                jackpot_amount:  U512::zero(),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 4);
@@ -440,7 +437,7 @@ mod tests {
                 round_id: expected_round,
                 player: charlie,
                 play_id: expected_play,
-                prize: U512::zero(),
+                prize_amount: U512::zero(),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
                 jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
@@ -473,7 +470,7 @@ mod tests {
                 round_id: expected_round,
                 player: charlie,
                 play_id: expected_play,
-                prize: U512::from(2 * ONE_CSPR_IN_MOTES),
+                prize_amount: U512::from(2 * ONE_CSPR_IN_MOTES),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
                 jackpot_amount:  U512::from(96 * ONE_CSPR_IN_MOTES),
