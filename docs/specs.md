@@ -1,8 +1,6 @@
 # PWB Example dApp
 
-Created: March 15, 2024 1:03 PM
-Project: Marketing
-Status: In Progress
+Created: March 15, 2024
 
 ## Casper example dApp
 
