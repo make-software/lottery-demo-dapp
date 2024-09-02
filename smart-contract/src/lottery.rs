@@ -1,9 +1,8 @@
 use core::cmp::min;
-use odra::casper_types::URef;
 use odra::casper_types::U256;
 use odra::casper_types::U512;
 #[cfg(target_arch = "wasm32")]
-use odra::odra_casper_wasm_env::casper_contract::contract_api::storage;
+use odra::odra_casper_wasm_env::casper_contract::contract_api::runtime;
 use odra::prelude::*;
 use odra::Address;
 use odra::SubModule;
@@ -274,19 +273,8 @@ impl Lottery {
     /// Generates cryptographically secure random number (WASM32 only).
     #[cfg(target_arch = "wasm32")]
     fn get_random_number(&self) -> u64 {
-        let timestamp = self.env().get_block_time();
-        let mut salted_seed = [0u8; 80];
-
-        //TODO: replace with `random_bytes` function once its available
-        //https://docs.rs/casper-contract/latest/casper_contract/contract_api/runtime/fn.random_bytes.html
-        let uref: URef = storage::new_uref(1u8);
-        salted_seed[..32].copy_from_slice(&uref.addr());
-
-        salted_seed[32..40].copy_from_slice(&timestamp.to_be_bytes());
-
-        let hashed_data = self.env().hash(&salted_seed);
-
-        u64::from_be_bytes(hashed_data[..8].try_into().unwrap()) % 100
+        let random_bytes: [u8; 32] = runtime::random_bytes();
+        u64::from_be_bytes(random_bytes[..8].try_into().unwrap()) % 100
     }
 
     /// Ensures attached value matches ticket price. Reverts if wrong.
@@ -385,7 +373,7 @@ mod tests {
                 prize_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::zero(),
+                jackpot_amount: U512::zero(),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 3);
@@ -406,7 +394,7 @@ mod tests {
                 prize_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
                 is_jackpot: true,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::zero(),
+                jackpot_amount: U512::zero(),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 4);
@@ -440,7 +428,7 @@ mod tests {
                 prize_amount: U512::zero(),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::from(49 * ONE_CSPR_IN_MOTES),
+                jackpot_amount: U512::from(49 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 5);
@@ -473,7 +461,7 @@ mod tests {
                 prize_amount: U512::from(2 * ONE_CSPR_IN_MOTES),
                 is_jackpot: false,
                 timestamp: ONE_HOUR_IN_MILLISECONDS,
-                jackpot_amount:  U512::from(96 * ONE_CSPR_IN_MOTES),
+                jackpot_amount: U512::from(96 * ONE_CSPR_IN_MOTES),
             },
         ));
         assert_eq!(env.events_count(contract.address()), 6);
